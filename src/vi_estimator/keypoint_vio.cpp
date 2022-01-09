@@ -67,16 +67,26 @@ KeypointVioEstimator::KeypointVioEstimator(
   marg_b.setZero(POSE_VEL_BIAS_SIZE);
 
   // prior on position
+  //^ H is information matrix(inverse of convarinace matrix) of
+  //^ pose/velovity/bias, large value in H means small uncertainty
+  //^ setting position information matrix to a large value
+  //^ config.vio_init_pose_weight(1e8) means small uncertainty
   marg_H.diagonal().head<3>().setConstant(config.vio_init_pose_weight);
   // prior on yaw
+  //^ yaw is rotation along z-axis, this is unobservable varibale in VIO along
+  //^ with position, give a large value to information matrix to indicate small
+  //^ uncertainty.
   marg_H(5, 5) = config.vio_init_pose_weight;
 
   // small prior to avoid jumps in bias
+  //^ Give a small value(1e1) to ba information matrix and 1e2 to bg information
+  //^ matrix indicates large uncertainty
   marg_H.diagonal().segment<3>(9).array() = config.vio_init_ba_weight;
   marg_H.diagonal().segment<3>(12).array() = config.vio_init_bg_weight;
 
   std::cout << "marg_H\n" << marg_H << std::endl;
 
+  //^ Convert standard deviation given in config to information matrix
   gyro_bias_weight = calib.gyro_bias_std.array().square().inverse();
   accel_bias_weight = calib.accel_bias_std.array().square().inverse();
 
@@ -113,20 +123,23 @@ void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
   auto proc_func = [&, bg, ba] {
     OpticalFlowResult::Ptr prev_frame, curr_frame;
     IntegratedImuMeasurement<double>::Ptr meas;
-
+    //^ Convert continous noise into discrete noise,
+    //^ see https://github.com/ethz-asl/kalibr/wiki/IMU-Noise-Model
     const Eigen::Vector3d accel_cov =
         calib.dicrete_time_accel_noise_std().array().square();
     const Eigen::Vector3d gyro_cov =
         calib.dicrete_time_gyro_noise_std().array().square();
-
+    //^ Pop imu measurement from imu buffer, and correct it using calibration
     ImuData<double>::Ptr data;
     imu_data_queue.pop(data);
     data->accel = calib.calib_accel_bias.getCalibrated(data->accel);
     data->gyro = calib.calib_gyro_bias.getCalibrated(data->gyro);
 
+    //^ Run into main loop of the thread
     while (true) {
+      //^ Pop oldest visual frame from visual buffer as current frame
       vision_data_queue.pop(curr_frame);
-
+      //^ If simulating as real-time, using the latest frame as current frame
       if (config.vio_enforce_realtime) {
         // drop current frame if another frame is already in the queue.
         while (!vision_data_queue.empty()) vision_data_queue.pop(curr_frame);
@@ -138,8 +151,9 @@ void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
 
       // Correct camera time offset
       // curr_frame->t_ns += calib.cam_time_offset_ns;
-
+      //^ VIO system has not been initialized
       if (!initialized) {
+        //^ Pop all the imu data earlier than current visual frame
         while (data->t_ns < curr_frame->t_ns) {
           imu_data_queue.pop(data);
           if (!data.get()) break;
@@ -147,19 +161,22 @@ void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
           data->gyro = calib.calib_gyro_bias.getCalibrated(data->gyro);
           // std::cout << "Skipping IMU data.." << std::endl;
         }
-
+        //^ Set initial velocity of IMU in world to zero
         Eigen::Vector3d vel_w_i_init;
         vel_w_i_init.setZero();
-
+        //^ Set initial rotation of IMU in world as rotation from current imu
+        //^ acceleration vector to (0, 0, 1)
         T_w_i_init.setQuaternion(Eigen::Quaterniond::FromTwoVectors(
             data->accel, Eigen::Vector3d::UnitZ()));
-
+        //^ Create an IMU preintegration which starts at current visual frame
         last_state_t_ns = curr_frame->t_ns;
         imu_meas[last_state_t_ns] =
             IntegratedImuMeasurement(last_state_t_ns, bg, ba);
+        //^ Create imu state(p/q/v/bg/ba) at current visual frame
         frame_states[last_state_t_ns] = PoseVelBiasStateWithLin<double>(
             last_state_t_ns, T_w_i_init, vel_w_i_init, bg, ba, true);
-
+        //^ Update AbsOrderMap which stores all the states and its order
+        //^ please read class AbsOrderMap for details
         marg_order.abs_order_map[last_state_t_ns] =
             std::make_pair(0, POSE_VEL_BIAS_SIZE);
         marg_order.total_size = POSE_VEL_BIAS_SIZE;
@@ -171,23 +188,24 @@ void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
 
         initialized = true;
       }
-
+      //^ VIO system is initialized
       if (prev_frame) {
         // preintegrate measurements
 
         auto last_state = frame_states.at(last_state_t_ns);
-
+        //^ Create an IMU preintegration stated at previous visual frame
         meas.reset(new IntegratedImuMeasurement<double>(
             prev_frame->t_ns, last_state.getState().bias_gyro,
             last_state.getState().bias_accel));
-
+        //^ Pop all the imu data earlier than previous visual frame
         while (data->t_ns <= prev_frame->t_ns) {
           imu_data_queue.pop(data);
           if (!data.get()) break;
           data->accel = calib.calib_accel_bias.getCalibrated(data->accel);
           data->gyro = calib.calib_gyro_bias.getCalibrated(data->gyro);
         }
-
+        //^ Integrate imu data in imu buffer between previous and current viual
+        //^ frame into preintegration
         while (data->t_ns <= curr_frame->t_ns) {
           meas->integrate(*data, accel_cov, gyro_cov);
           imu_data_queue.pop(data);
@@ -195,7 +213,12 @@ void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
           data->accel = calib.calib_accel_bias.getCalibrated(data->accel);
           data->gyro = calib.calib_gyro_bias.getCalibrated(data->gyro);
         }
-
+        //^ End timestamp of preintegration is still smaller than current frame,
+        //^ but next imu data's timestamp MUST be larger than current frame's.
+        //^ Here use current frame's timestamp as next data's timestamp, it is
+        //^ no a good method, use intepolation between imu data may be a choice.
+        // TODO Use intepolation at bound in preintegration, especially when imu
+        // rate is low
         if (meas->get_start_t_ns() + meas->get_dt_ns() < curr_frame->t_ns) {
           if (!data.get()) break;
           int64_t tmp = data->t_ns;
@@ -204,7 +227,10 @@ void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
           data->t_ns = tmp;
         }
       }
-
+      //! Important function, fuse imu and visual measurement to optimize
+      //! all the variables in the sliding windows
+      //^ curr_frame: stores results of optical flow tracking at cuurent frame
+      //^ meas: stores preintegration from previous frame to current frame
       measure(curr_frame, meas);
       prev_frame = curr_frame;
     }

@@ -69,7 +69,10 @@ struct PoseVelBiasStateWithLin {
     linearized = false;
     delta.setZero();
   };
-
+  /**
+   * @param[in] linearized if it is true, applyInc() should add linearized state
+   * to current state; otherwise, update linearized state directly
+   */
   PoseVelBiasStateWithLin(int64_t t_ns, const Sophus::SE3d& T_w_i,
                           const Eigen::Vector3d& vel_w_i,
                           const Eigen::Vector3d& bias_gyro,
@@ -259,9 +262,10 @@ struct PoseStateWithLin {
 };
 
 struct AbsOrderMap {
-  std::map<int64_t, std::pair<int, int>> abs_order_map;
-  size_t items = 0;
-  size_t total_size = 0;
+  std::map<int64_t, std::pair<int, int>>
+      abs_order_map;  //!< timestamp -- (start_index, varibale_size)
+  size_t items = 0;   //!< indicates how many variable blocks in this order map
+  size_t total_size = 0;  //!< indicates total dimensions of all variables
 
   void print_order() {
     for (const auto& kv : abs_order_map) {

@@ -418,13 +418,15 @@ class BundleAdjustmentBase {
     return PoseStateWithLin(it2->second);
   }
 
-  Eigen::aligned_map<int64_t, PoseVelBiasStateWithLin<double>> frame_states;
-  Eigen::aligned_map<int64_t, PoseStateWithLin<double>> frame_poses;
+  Eigen::aligned_map<int64_t, PoseVelBiasStateWithLin<double>>
+      frame_states;  //!< Timestamp -- {p/v/q/bg/ba}
+  Eigen::aligned_map<int64_t, PoseStateWithLin<double>>
+      frame_poses;  //!< Timestamp -- {p/q}
 
   // Point management
   LandmarkDatabase lmdb;
 
-  double obs_std_dev;
+  double obs_std_dev;  //!< Standard deviation of visual observation
   double huber_thresh;
 
   basalt::Calibration<double> calib;

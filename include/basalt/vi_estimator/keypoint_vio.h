@@ -186,8 +186,8 @@ class KeypointVioEstimator : public VioEstimatorBase,
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
  private:
-  bool take_kf;
-  int frames_after_kf;
+  bool take_kf;         //!< Flag if it is keyframe
+  int frames_after_kf;  //!< Number of frames after latest keyframe
   std::set<int64_t> kf_ids;
 
   int64_t last_state_t_ns;
@@ -208,8 +208,8 @@ class KeypointVioEstimator : public VioEstimatorBase,
 
   Eigen::Vector3d gyro_bias_weight, accel_bias_weight;
 
-  size_t max_states;
-  size_t max_kfs;
+  size_t max_states;  //!< Size of sliding window of frames
+  size_t max_kfs;     //!< Size of sliding window of keyframes
 
   Sophus::SE3d T_w_i_init;
 
