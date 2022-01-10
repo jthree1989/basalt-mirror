@@ -225,27 +225,24 @@ void BundleAdjustmentBase::computeError(
     }
   }
 }
-
+// clang-format off
 void BundleAdjustmentBase::linearizeHelper(
     Eigen::aligned_vector<RelLinData>& rld_vec,
-    const Eigen::aligned_map<
-        TimeCamId, Eigen::aligned_map<
-                       TimeCamId, Eigen::aligned_vector<KeypointObservation>>>&
-        obs_to_lin,
-    double& error) const {
+    const Eigen::aligned_map<TimeCamId, Eigen::aligned_map<TimeCamId, Eigen::aligned_vector<KeypointObservation>>>& obs_to_lin,
+    double& error) const 
+{
   error = 0;
-
   rld_vec.clear();
 
-  std::vector<TimeCamId> obs_tcid_vec;
+  std::vector<TimeCamId> obs_tcid_vec;  //^ All related frame_ids in BA
   for (const auto& kv : obs_to_lin) {
     obs_tcid_vec.emplace_back(kv.first);
     rld_vec.emplace_back(lmdb.numLandmarks(), kv.second.size());
   }
 
-  tbb::parallel_for(
-      tbb::blocked_range<size_t>(0, obs_tcid_vec.size()),
+  tbb::parallel_for(tbb::blocked_range<size_t>(0, obs_tcid_vec.size()),
       [&](const tbb::blocked_range<size_t>& range) {
+        //^ Loop every frame to construct visual factor 
         for (size_t r = range.begin(); r != range.end(); ++r) {
           auto kv = obs_to_lin.find(obs_tcid_vec[r]);
 
@@ -253,22 +250,25 @@ void BundleAdjustmentBase::linearizeHelper(
 
           rld.error = 0;
 
-          const TimeCamId& tcid_h = kv->first;
+          const TimeCamId& tcid_h = kv->first; //^ frame_cam_id of host frame
 
           for (const auto& obs_kv : kv->second) {
-            const TimeCamId& tcid_t = obs_kv.first;
+            const TimeCamId& tcid_t = obs_kv.first; //^ frame_cam_id of target frame
             if (tcid_h != tcid_t) {
               // target and host are not the same
+              //^ store pair of {host frame_cam_id, target frame_cam_id}
               rld.order.emplace_back(std::make_pair(tcid_h, tcid_t));
 
               PoseStateWithLin state_h = getPoseStateWithLin(tcid_h.frame_id);
               PoseStateWithLin state_t = getPoseStateWithLin(tcid_t.frame_id);
 
+              //^ d_rel_d_h -- Jacobian of relative transformation between host and target T_th with respect to T_wh
+              //^ d_rel_d_t -- Jacobian of relative transformation between host and target T_th with respect to T_wt
               Sophus::Matrix6d d_rel_d_h, d_rel_d_t;
-
               Sophus::SE3d T_t_h_sophus = computeRelPose(
                   state_h.getPoseLin(), calib.T_i_c[tcid_h.cam_id],
-                  state_t.getPoseLin(), calib.T_i_c[tcid_t.cam_id], &d_rel_d_h,
+                  state_t.getPoseLin(), calib.T_i_c[tcid_t.cam_id], 
+                  &d_rel_d_h,
                   &d_rel_d_t);
 
               rld.d_rel_d_h.emplace_back(d_rel_d_h);
@@ -382,7 +382,7 @@ void BundleAdjustmentBase::linearizeHelper(
 
   for (const auto& rld : rld_vec) error += rld.error;
 }
-
+// clang-format on
 void BundleAdjustmentBase::linearizeRel(const RelLinData& rld,
                                         Eigen::MatrixXd& H,
                                         Eigen::VectorXd& b) {

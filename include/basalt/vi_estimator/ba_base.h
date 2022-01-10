@@ -43,19 +43,22 @@ namespace basalt {
 class BundleAdjustmentBase {
  public:
   struct RelLinDataBase {
-    std::vector<std::pair<TimeCamId, TimeCamId>> order;
+    // clang-format off
+    std::vector<std::pair<TimeCamId, TimeCamId>> order; //!< vector of {host frame_cam_id, target frame_cam_id}
 
-    Eigen::aligned_vector<Sophus::Matrix6d> d_rel_d_h;
-    Eigen::aligned_vector<Sophus::Matrix6d> d_rel_d_t;
+    Eigen::aligned_vector<Sophus::Matrix6d> d_rel_d_h;  //!< J_T_th_dT_wh -- Jacobian of relative transformation between host and target T_th with respect to T_wh
+    Eigen::aligned_vector<Sophus::Matrix6d> d_rel_d_t;  //!< J_T_th_dT_wt -- Jacobian of relative transformation between host and target T_th with respect to T_wt
+    // clang-format on
   };
 
   struct FrameRelLinData {
-    Sophus::Matrix6d Hpp;
-    Sophus::Vector6d bp;
+    // clang-format off
+    Sophus::Matrix6d Hpp;   //!< Hessian matrix of pose to pose
+    Sophus::Vector6d bp;    //!< b vector related to pose
 
     std::vector<int> lm_id;
-    Eigen::aligned_vector<Eigen::Matrix<double, 6, 3>> Hpl;
-
+    Eigen::aligned_vector<Eigen::Matrix<double, 6, 3>> Hpl; //!< Hessian matrix of pose to landmarks
+    // clang-format on
     FrameRelLinData() {
       Hpp.setZero();
       bp.setZero();
@@ -87,15 +90,15 @@ class BundleAdjustmentBase {
         kv.second = Hll_inv;
       }
     }
+    // clang-format off
+    Eigen::aligned_unordered_map<int, Eigen::Matrix3d> Hll; //!< Hessian matrix of every landmark(keypoint)
+    Eigen::aligned_unordered_map<int, Eigen::Vector3d> bl;  //!< b vector related to every landmark(keypoint)
+    Eigen::aligned_unordered_map<int, std::vector<std::pair<size_t, size_t>>> lm_to_obs;
 
-    Eigen::aligned_unordered_map<int, Eigen::Matrix3d> Hll;
-    Eigen::aligned_unordered_map<int, Eigen::Vector3d> bl;
-    Eigen::aligned_unordered_map<int, std::vector<std::pair<size_t, size_t>>>
-        lm_to_obs;
-
-    Eigen::aligned_vector<FrameRelLinData> Hpppl;
+    Eigen::aligned_vector<FrameRelLinData> Hpppl;           //!< Hessian matrix of pose to pose(Hpp) and Hessian matrix of pose to landmark 
 
     double error;
+    // clang-format on
   };
 
   void computeError(double& error,
@@ -417,18 +420,17 @@ class BundleAdjustmentBase {
 
     return PoseStateWithLin(it2->second);
   }
-
-  Eigen::aligned_map<int64_t, PoseVelBiasStateWithLin<double>>
-      frame_states;  //!< Timestamp -- {p/v/q/bg/ba}
-  Eigen::aligned_map<int64_t, PoseStateWithLin<double>>
-      frame_poses;  //!< Timestamp -- {p/q}
+  // clang-format off
+  Eigen::aligned_map<int64_t, PoseVelBiasStateWithLin<double>> frame_states;  //!< frame_id -- {p/v/q/bg/ba}
+  Eigen::aligned_map<int64_t, PoseStateWithLin<double>> frame_poses;          //!< frame_id -- {p/q}
 
   // Point management
-  LandmarkDatabase lmdb;
+  LandmarkDatabase lmdb;      //!< Database of landmarks
 
-  double obs_std_dev;  //!< Standard deviation of visual observation
+  double obs_std_dev;         //!< Standard deviation of visual observation
   double huber_thresh;
 
   basalt::Calibration<double> calib;
+  // clang-format on
 };
 }  // namespace basalt

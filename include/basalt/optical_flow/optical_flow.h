@@ -59,13 +59,14 @@ struct OpticalFlowInput {
 };
 
 struct OpticalFlowResult {
+  // clang-format off
   using Ptr = std::shared_ptr<OpticalFlowResult>;
 
   int64_t t_ns;
-  std::vector<Eigen::aligned_map<KeypointId, Eigen::AffineCompact2f>>
-      observations;
-
+  //!< AffineCompact2f is 2x3 matrix represents homogeneous transformation in a 2-D space, size of vector is number of cameras
+  std::vector<Eigen::aligned_map<KeypointId, Eigen::AffineCompact2f>> observations;  
   OpticalFlowInput::Ptr input_images;
+  // clang-format on
 };
 
 class OpticalFlowBase {

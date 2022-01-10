@@ -40,9 +40,10 @@ namespace basalt {
 
 // keypoint position defined relative to some frame
 struct KeypointPosition {
+  // clang-format off
   TimeCamId kf_id;
   Eigen::Vector2d dir;
-  double id;
+  double id;                //!< inverse depth
 
   inline void backup() {
     backup_dir = dir;
@@ -59,6 +60,7 @@ struct KeypointPosition {
  private:
   Eigen::Vector2d backup_dir;
   double backup_id;
+  // clang-format on
 };
 
 struct KeypointObservation {
@@ -70,7 +72,8 @@ struct KeypointObservation {
 
 class LandmarkDatabase {
  public:
-  // Non-const
+  // clang-format off
+  // Non-const functions
   void addLandmark(int lm_id, const KeypointPosition& pos);
 
   void removeFrame(const FrameId& frame);
@@ -79,23 +82,18 @@ class LandmarkDatabase {
                        const std::set<FrameId>& poses_to_marg,
                        const std::set<FrameId>& states_to_marg_all);
 
-  void addObservation(const TimeCamId& tcid_target,
-                      const KeypointObservation& o);
+  void addObservation(const TimeCamId& tcid_target, const KeypointObservation& o);
 
   KeypointPosition& getLandmark(int lm_id);
 
-  // Const
+  // Const functions
   const KeypointPosition& getLandmark(int lm_id) const;
 
   std::vector<TimeCamId> getHostKfs() const;
 
-  std::vector<KeypointPosition> getLandmarksForHost(
-      const TimeCamId& tcid) const;
+  std::vector<KeypointPosition> getLandmarksForHost(const TimeCamId& tcid) const;
 
-  const Eigen::aligned_map<
-      TimeCamId, Eigen::aligned_map<
-                     TimeCamId, Eigen::aligned_vector<KeypointObservation>>>&
-  getObservations() const;
+  const Eigen::aligned_map<TimeCamId, Eigen::aligned_map<TimeCamId, Eigen::aligned_vector<KeypointObservation>>>& getObservations() const;
 
   bool landmarkExists(int lm_id) const;
 
@@ -118,16 +116,12 @@ class LandmarkDatabase {
   }
 
  private:
-  Eigen::aligned_unordered_map<int, KeypointPosition> kpts;
-  Eigen::aligned_map<
-      TimeCamId,
-      Eigen::aligned_map<TimeCamId, Eigen::aligned_vector<KeypointObservation>>>
-      obs;
-
-  std::unordered_map<TimeCamId, std::set<int>> host_to_kpts;
-
-  int num_observations = 0;
-  Eigen::aligned_unordered_map<int, int> kpts_num_obs;
+  Eigen::aligned_unordered_map<int, KeypointPosition> kpts;     //!< Stores all krypoints, keypoint_id -- KeypointPosition
+  Eigen::aligned_map<TimeCamId, Eigen::aligned_map<TimeCamId, Eigen::aligned_vector<KeypointObservation>>> obs;   //! { frame_id -- {cam_id, vector of observations} }
+  std::unordered_map<TimeCamId, std::set<int>> host_to_kpts;    //!<
+  int num_observations = 0;                                     //!< total number of observations
+  Eigen::aligned_unordered_map<int, int> kpts_num_obs;          //!< Keypoint_id -- observation times
+  // clang-format on
 };
 
 }  // namespace basalt

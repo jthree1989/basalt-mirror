@@ -121,9 +121,12 @@ std::vector<KeypointPosition> LandmarkDatabase::getLandmarksForHost(
 
 void LandmarkDatabase::addObservation(const TimeCamId &tcid_target,
                                       const KeypointObservation &o) {
+  //^ Ensure it is the observation of keypoint in database, only insert such
+  //^ observations
   auto it = kpts.find(o.kpt_id);
   BASALT_ASSERT(it != kpts.end());
-
+  //^ it->second.kf_id -- frame id, tcid_target -- camera id
+  //^ obs_vec -- vector of observations that observed by camera id at frame id
   auto &obs_vec = obs[it->second.kf_id][tcid_target];
 
   // Check that the point observation is inserted only once

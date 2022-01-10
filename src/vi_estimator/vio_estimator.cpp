@@ -46,8 +46,10 @@ VioEstimatorBase::Ptr VioEstimatorFactory::getVioEstimator(
   VioEstimatorBase::Ptr res;
 
   if (use_imu) {
+    //^ VIO system
     res.reset(new KeypointVioEstimator(g, cam, config));
   } else {
+    //^ VO system
     res.reset(new KeypointVoEstimator(cam, config));
   }
 

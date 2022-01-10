@@ -77,7 +77,11 @@ class KeypointVioEstimator : public VioEstimatorBase,
 
   void addIMUToQueue(const ImuData<double>::Ptr& data);
   void addVisionToQueue(const OpticalFlowResult::Ptr& data);
-
+  /**
+   * @param[in] data
+   * @param[out] meas
+   * @return bool
+   */
   bool measure(const OpticalFlowResult::Ptr& data,
                const IntegratedImuMeasurement<double>::Ptr& meas);
 
@@ -186,30 +190,31 @@ class KeypointVioEstimator : public VioEstimatorBase,
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
  private:
-  bool take_kf;         //!< Flag if it is keyframe
-  int frames_after_kf;  //!< Number of frames after latest keyframe
-  std::set<int64_t> kf_ids;
+  // clang-format off
+  bool take_kf;                     //!< Flag if it is keyframe
+  int frames_after_kf;              //!< Number of frames after latest keyframe
+  std::set<int64_t> kf_ids;         //!< Set of frame ids of keyframe
 
-  int64_t last_state_t_ns;
-  Eigen::aligned_map<int64_t, IntegratedImuMeasurement<double>> imu_meas;
+  int64_t last_state_t_ns;          //!< Timestamp of previous frame in nanosecond
+  Eigen::aligned_map<int64_t, IntegratedImuMeasurement<double>> imu_meas;  //!< Buffer of  preintegration
 
   const Eigen::Vector3d g;
 
   // Input
 
-  Eigen::aligned_map<int64_t, OpticalFlowResult::Ptr> prev_opt_flow_res;
+  Eigen::aligned_map<int64_t, OpticalFlowResult::Ptr> prev_opt_flow_res;  //!< frame_id -- optical flow results
 
-  std::map<int64_t, int> num_points_kf;
+  std::map<int64_t, int> num_points_kf;                                   //!< frame_id of keyframe -- number of triangulated points added into database
 
   // Marginalization
-  AbsOrderMap marg_order;
+  AbsOrderMap marg_order;           //!< Stores information(timestamp, blocks,...) of all states related in BA                                                   
   Eigen::MatrixXd marg_H;
   Eigen::VectorXd marg_b;
 
   Eigen::Vector3d gyro_bias_weight, accel_bias_weight;
 
-  size_t max_states;  //!< Size of sliding window of frames
-  size_t max_kfs;     //!< Size of sliding window of keyframes
+  size_t max_states;               //!< Size of sliding window of frames
+  size_t max_kfs;                  //!< Size of sliding window of keyframes
 
   Sophus::SE3d T_w_i_init;
 
@@ -223,5 +228,6 @@ class KeypointVioEstimator : public VioEstimatorBase,
   int64_t msckf_kf_id;
 
   std::shared_ptr<std::thread> processing_thread;
+  // clang-format on
 };
 }  // namespace basalt

@@ -81,6 +81,8 @@ KeypointVioEstimator::KeypointVioEstimator(
   // small prior to avoid jumps in bias
   //^ Give a small value(1e1) to ba information matrix and 1e2 to bg information
   //^ matrix indicates large uncertainty
+  //^ !!!attention!!!: here use array() of Eigen to do coefficient-wise
+  //^ operations
   marg_H.diagonal().segment<3>(9).array() = config.vio_init_ba_weight;
   marg_H.diagonal().segment<3>(12).array() = config.vio_init_bg_weight;
 
@@ -90,8 +92,8 @@ KeypointVioEstimator::KeypointVioEstimator(
   gyro_bias_weight = calib.gyro_bias_std.array().square().inverse();
   accel_bias_weight = calib.accel_bias_std.array().square().inverse();
 
-  max_states = config.vio_max_states;
-  max_kfs = config.vio_max_kfs;
+  max_states = config.vio_max_states;  // vio_max_states = 3
+  max_kfs = config.vio_max_kfs;        // vio_max_kfs = 7
 
   opt_started = false;
 
@@ -120,6 +122,7 @@ void KeypointVioEstimator::initialize(int64_t t_ns, const Sophus::SE3d& T_w_i,
 
 void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
                                       const Eigen::Vector3d& ba) {
+  //^ Lambda function of thread
   auto proc_func = [&, bg, ba] {
     OpticalFlowResult::Ptr prev_frame, curr_frame;
     IntegratedImuMeasurement<double>::Ptr meas;
@@ -135,7 +138,7 @@ void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
     data->accel = calib.calib_accel_bias.getCalibrated(data->accel);
     data->gyro = calib.calib_gyro_bias.getCalibrated(data->gyro);
 
-    //^ Run into main loop of the thread
+    //^ Run into main loop of the VIO thread
     while (true) {
       //^ Pop oldest visual frame from visual buffer as current frame
       vision_data_queue.pop(curr_frame);
@@ -191,7 +194,6 @@ void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
       //^ VIO system is initialized
       if (prev_frame) {
         // preintegrate measurements
-
         auto last_state = frame_states.at(last_state_t_ns);
         //^ Create an IMU preintegration stated at previous visual frame
         meas.reset(new IntegratedImuMeasurement<double>(
@@ -229,9 +231,10 @@ void KeypointVioEstimator::initialize(const Eigen::Vector3d& bg,
       }
       //! Important function, fuse imu and visual measurement to optimize
       //! all the variables in the sliding windows
-      //^ curr_frame: stores results of optical flow tracking at cuurent frame
+      //^ curr_frame: stores results of optical flow tracking at current frame
       //^ meas: stores preintegration from previous frame to current frame
       measure(curr_frame, meas);
+      //^ update prev_frame for looping again
       prev_frame = curr_frame;
     }
 
@@ -260,82 +263,101 @@ bool KeypointVioEstimator::measure(
     const OpticalFlowResult::Ptr& opt_flow_meas,
     const IntegratedImuMeasurement<double>::Ptr& meas) {
   if (meas.get()) {
+    //^ State of previous frame MUST have the same time as the starting time of
+    //^ preintegration
     BASALT_ASSERT(frame_states[last_state_t_ns].getState().t_ns ==
                   meas->get_start_t_ns());
+    //^ Time of current frame MUST equal to the end of current preintegration
     BASALT_ASSERT(opt_flow_meas->t_ns ==
                   meas->get_dt_ns() + meas->get_start_t_ns());
-
+    //^ Get state at previous visual frame
     PoseVelBiasState next_state = frame_states.at(last_state_t_ns).getState();
-
+    //^ Propagate state to current frame using preintegration
     meas->predictState(frame_states.at(last_state_t_ns).getState(), g,
                        next_state);
-
+    //^ Update timestamp of previous frame
     last_state_t_ns = opt_flow_meas->t_ns;
     next_state.t_ns = opt_flow_meas->t_ns;
-
+    //^ Update current state in sliding window
     frame_states[last_state_t_ns] = next_state;
-
+    //^ Update preintegration in buffer
     imu_meas[meas->get_start_t_ns()] = *meas;
   }
 
   // save results
   prev_opt_flow_res[opt_flow_meas->t_ns] = opt_flow_meas;
 
+  //! [Important] start to do data association
   // Make new residual for existing keypoints
+  //^ Number of keypoints tracked by camera-0
   int connected0 = 0;
+  //^ Frame_id -- number of keypoints observed
   std::map<int64_t, int> num_points_connected;
+  //^ Set of keypoint id which is newly observed in camera-0
   std::unordered_set<int> unconnected_obs0;
-  for (size_t i = 0; i < opt_flow_meas->observations.size(); i++) {
-    TimeCamId tcid_target(opt_flow_meas->t_ns, i);
-
-    for (const auto& kv_obs : opt_flow_meas->observations[i]) {
+  //^ Loop all observations in current optical flow result
+  for (size_t cam_id = 0; cam_id < opt_flow_meas->observations.size();
+       cam_id++) {
+    //^ tcid_target is frame_id and cam_id of current observation
+    TimeCamId tcid_target(opt_flow_meas->t_ns, cam_id);
+    //^ Loop all observations in each camera
+    for (const std::pair<KeypointId, Eigen::AffineCompact2f>& kv_obs :
+         opt_flow_meas->observations[cam_id]) {
       int kpt_id = kv_obs.first;
-
       if (lmdb.landmarkExists(kpt_id)) {
+        //^ Keypoint is already in landmark database
+        //^ tcid_host is frame_id and cam_id in landmark database
         const TimeCamId& tcid_host = lmdb.getLandmark(kpt_id).kf_id;
-
+        //^ Construct KeypointObservation, only consider translation,
+        //^ add current observation of this keypoint into landmark database
         KeypointObservation kobs;
         kobs.kpt_id = kpt_id;
         kobs.pos = kv_obs.second.translation().cast<double>();
-
         lmdb.addObservation(tcid_target, kobs);
         // obs[tcid_host][tcid_target].push_back(kobs);
-
+        //^ Update number of observation of this keypoint
         if (num_points_connected.count(tcid_host.frame_id) == 0) {
           num_points_connected[tcid_host.frame_id] = 0;
         }
         num_points_connected[tcid_host.frame_id]++;
-
-        if (i == 0) connected0++;
+        //^ Update number of keypoints tracked in camera-0
+        if (cam_id == 0) connected0++;
       } else {
-        if (i == 0) {
+        //^ keypoint is not in landmark database
+        if (cam_id == 0) {
+          //^ Update set of untracked(or new) keypoints in camera-0
           unconnected_obs0.emplace(kpt_id);
         }
       }
     }
   }
-
+  //^ Check if current frame is keyframe by two rules:
+  //^ 1. Number of tracked keypoints in camera0 / all keypoints in camera0;
+  //^ 2. Current frame is enough far in time from last keyframe
   if (double(connected0) / (connected0 + unconnected_obs0.size()) <
           config.vio_new_kf_keypoints_thresh &&
-      frames_after_kf > config.vio_min_frames_after_kf)
+      frames_after_kf > config.vio_min_frames_after_kf) {
     take_kf = true;
+  }
 
   if (config.vio_debug) {
     std::cout << "connected0 " << connected0 << " unconnected0 "
               << unconnected_obs0.size() << std::endl;
   }
-
+  //^ Current frame is keyframe
   if (take_kf) {
     // Triangulate new points from stereo and make keyframe for camera 0
-    take_kf = false;
+    take_kf = false;  //^ if this keypoint is triangulated successfully
     frames_after_kf = 0;
     kf_ids.emplace(last_state_t_ns);
 
+    //^ frame_id of left camera(camera0)
     TimeCamId tcidl(opt_flow_meas->t_ns, 0);
 
     int num_points_added = 0;
     for (int lm_id : unconnected_obs0) {
-      // Find all observations
+      //^ For newly observed keypoints,
+      //^ find all of their observations from all previous optical flow results
       std::map<TimeCamId, KeypointObservation> kp_obs;
 
       for (const auto& kv : prev_opt_flow_res) {
@@ -380,16 +402,21 @@ bool KeypointVioEstimator::measure(
         Sophus::SE3d T_i0_i1 =
             getPoseStateWithLin(tcidl.frame_id).getPose().inverse() *
             getPoseStateWithLin(tcido.frame_id).getPose();
+        //^ T_0_1 is T_c0_cx, i.e. transformation matrix betweem camera poses
         Sophus::SE3d T_0_1 =
             calib.T_i_c[0].inverse() * T_i0_i1 * calib.T_i_c[tcido.cam_id];
-
+        //^ Poses are too close to triangulate point
         if (T_0_1.translation().squaredNorm() < min_triang_distance2) continue;
 
         Eigen::Vector4d p0_triangulated =
             triangulate(p0_3d.head<3>(), p1_3d.head<3>(), T_0_1);
-
-        if (p0_triangulated.array().isFinite().all() &&
-            p0_triangulated[3] > 0 && p0_triangulated[3] < 3.0) {
+        // clang-format off
+        if (p0_triangulated.array().isFinite().all() &&     //^ 3d point is finite
+            p0_triangulated[3] > 0 &&                       //^ in front of two camera
+            p0_triangulated[3] < 3.0)                       //^ not too far from camera
+        // clang-format on 
+        {
+          //^ Good triangulation, add keypoint(landmark) into database
           KeypointPosition kpt_pos;
           kpt_pos.kf_id = tcidl;
           kpt_pos.dir = StereographicParam<double>::project(p0_triangulated);
@@ -410,10 +437,12 @@ bool KeypointVioEstimator::measure(
 
     num_points_kf[opt_flow_meas->t_ns] = num_points_added;
   } else {
+    //^ Current frame is not keyframe
     frames_after_kf++;
   }
-
+  //^ Bundle-Adjustment
   optimize();
+  //^ Marginalization strategy
   marginalize(num_points_connected);
 
   if (out_state_queue) {
@@ -773,7 +802,7 @@ void KeypointVioEstimator::marginalize(
     //    marg_order.print_order();
   }
 }
-
+// clang-format off
 void KeypointVioEstimator::optimize() {
   if (config.vio_debug) {
     std::cout << "=================================" << std::endl;
@@ -782,7 +811,7 @@ void KeypointVioEstimator::optimize() {
   if (opt_started || frame_states.size() > 4) {
     // Optimize
     opt_started = true;
-
+    //^ Use AbsOrderMap to insert variable blocks
     AbsOrderMap aom;
 
     for (const auto& kv : frame_poses) {
@@ -820,30 +849,25 @@ void KeypointVioEstimator::optimize() {
 
       double rld_error;
       Eigen::aligned_vector<RelLinData> rld_vec;
+      //^ Compute visual factor
       linearizeHelper(rld_vec, lmdb.getObservations(), rld_error);
-
-      BundleAdjustmentBase::LinearizeAbsReduce<DenseAccumulator<double>> lopt(
-          aom);
-
-      tbb::blocked_range<Eigen::aligned_vector<RelLinData>::iterator> range(
-          rld_vec.begin(), rld_vec.end());
-
+      BundleAdjustmentBase::LinearizeAbsReduce<DenseAccumulator<double>> lopt(aom);
+      tbb::blocked_range<Eigen::aligned_vector<RelLinData>::iterator> range(rld_vec.begin(), rld_vec.end());
       tbb::parallel_reduce(range, lopt);
 
       double marg_prior_error = 0;
       double imu_error = 0, bg_error = 0, ba_error = 0;
-      linearizeAbsIMU(aom, lopt.accum.getH(), lopt.accum.getB(), imu_error,
-                      bg_error, ba_error, frame_states, imu_meas,
-                      gyro_bias_weight, accel_bias_weight, g);
-      linearizeMargPrior(marg_order, marg_H, marg_b, aom, lopt.accum.getH(),
-                         lopt.accum.getB(), marg_prior_error);
-
-      double error_total =
-          rld_error + imu_error + marg_prior_error + ba_error + bg_error;
+      //^ Compute IMU factor
+      linearizeAbsIMU(aom, lopt.accum.getH(), lopt.accum.getB(), 
+                      imu_error, bg_error, ba_error, 
+                      frame_states, imu_meas, gyro_bias_weight, accel_bias_weight, g);
+      //^ Compute prior factor
+      linearizeMargPrior(marg_order, marg_H, marg_b, aom, 
+                         lopt.accum.getH(), lopt.accum.getB(), marg_prior_error);
+      double error_total = rld_error + imu_error + marg_prior_error + ba_error + bg_error;
 
       if (config.vio_debug)
-        std::cout << "[LINEARIZE] Error: " << error_total << " num points "
-                  << std::endl;
+        std::cout << "[LINEARIZE] Error: " << error_total << " num points " << std::endl;
 
       lopt.accum.setup_solver();
       Eigen::VectorXd Hdiag = lopt.accum.Hdiagonal();
@@ -1024,7 +1048,7 @@ void KeypointVioEstimator::optimize() {
     std::cout << "=================================" << std::endl;
   }
 }  // namespace basalt
-
+// clang-format on
 void KeypointVioEstimator::computeProjections(
     std::vector<Eigen::aligned_vector<Eigen::Vector4d>>& data) const {
   for (const auto& kv : lmdb.getObservations()) {

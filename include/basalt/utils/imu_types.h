@@ -70,8 +70,8 @@ struct PoseVelBiasStateWithLin {
     delta.setZero();
   };
   /**
-   * @param[in] linearized if it is true, applyInc() should add linearized state
-   * to current state; otherwise, update linearized state directly
+   * @param[in] linearized if it is true, applyInc() update current_state
+   * directly, otherwise, update state_linearized instead.
    */
   PoseVelBiasStateWithLin(int64_t t_ns, const Sophus::SE3d& T_w_i,
                           const Eigen::Vector3d& vel_w_i,
@@ -262,18 +262,18 @@ struct PoseStateWithLin {
 };
 
 struct AbsOrderMap {
-  std::map<int64_t, std::pair<int, int>>
-      abs_order_map;  //!< timestamp -- (start_index, varibale_size)
-  size_t items = 0;   //!< indicates how many variable blocks in this order map
-  size_t total_size = 0;  //!< indicates total dimensions of all variables
+  // clang-format off
+  std::map<int64_t, std::pair<int, int>> abs_order_map;  //!< frame_id -- (start_index, varibale_size)
+  size_t items = 0;                                      //!< indicates how many variable blocks in this order map
+  size_t total_size = 0;                                 //!< indicates total dimensions of all variables
 
   void print_order() {
     for (const auto& kv : abs_order_map) {
-      std::cout << kv.first << " (" << kv.second.first << ","
-                << kv.second.second << ")" << std::endl;
+      std::cout << kv.first << " (" << kv.second.first << "," << kv.second.second << ")" << std::endl;
     }
     std::cout << std::endl;
   }
+  // clang-format on 
 };
 
 struct MargData {
