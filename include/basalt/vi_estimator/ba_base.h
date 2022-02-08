@@ -93,7 +93,7 @@ class BundleAdjustmentBase {
     // clang-format off
     Eigen::aligned_unordered_map<int, Eigen::Matrix3d> Hll; //!< Hessian matrix of every landmark(keypoint)
     Eigen::aligned_unordered_map<int, Eigen::Vector3d> bl;  //!< b vector related to every landmark(keypoint)
-    Eigen::aligned_unordered_map<int, std::vector<std::pair<size_t, size_t>>> lm_to_obs;
+    Eigen::aligned_unordered_map<int, std::vector<std::pair<size_t, size_t>>> lm_to_obs; //!< landmark(keypoint) id -- {relative_pose_block_id in Hpppl vector -- landmark_block_id in Hpppl.lm_id vector}
 
     Eigen::aligned_vector<FrameRelLinData> Hpppl;           //!< Hessian matrix of pose to pose(Hpp) and Hessian matrix of pose to landmark 
 
@@ -314,10 +314,11 @@ class BundleAdjustmentBase {
 
       int abs_h_idx = aom.abs_order_map.at(tcid_h.frame_id).first;
       int abs_ti_idx = aom.abs_order_map.at(tcid_ti.frame_id).first;
-
+      //^ h_b = (d_rel_d_h)^T * rel_b
       accum.template addB<POSE_SIZE>(
           abs_h_idx, rld.d_rel_d_h[i].transpose() *
                          rel_b.segment<POSE_SIZE>(i * POSE_SIZE));
+      //^ h_t = (d_rel_d_t)^T * rel_t
       accum.template addB<POSE_SIZE>(
           abs_ti_idx, rld.d_rel_d_t[i].transpose() *
                           rel_b.segment<POSE_SIZE>(i * POSE_SIZE));
@@ -332,28 +333,28 @@ class BundleAdjustmentBase {
         if (tcid_h.frame_id == tcid_ti.frame_id ||
             tcid_h.frame_id == tcid_tj.frame_id)
           continue;
-
+        //^ H_hh = J_hr * H_rr * J_rh
         accum.template addH<POSE_SIZE, POSE_SIZE>(
             abs_h_idx, abs_h_idx,
             rld.d_rel_d_h[i].transpose() *
                 rel_H.block<POSE_SIZE, POSE_SIZE>(POSE_SIZE * i,
                                                   POSE_SIZE * j) *
                 rld.d_rel_d_h[j]);
-
+        //^ H_ih = J_ir * Hrr * J_rh
         accum.template addH<POSE_SIZE, POSE_SIZE>(
             abs_ti_idx, abs_h_idx,
             rld.d_rel_d_t[i].transpose() *
                 rel_H.block<POSE_SIZE, POSE_SIZE>(POSE_SIZE * i,
                                                   POSE_SIZE * j) *
                 rld.d_rel_d_h[j]);
-
+        //^ H_hj = J_hr * Hrr * J_rj
         accum.template addH<POSE_SIZE, POSE_SIZE>(
             abs_h_idx, abs_tj_idx,
             rld.d_rel_d_h[i].transpose() *
                 rel_H.block<POSE_SIZE, POSE_SIZE>(POSE_SIZE * i,
                                                   POSE_SIZE * j) *
                 rld.d_rel_d_t[j]);
-
+        //^
         accum.template addH<POSE_SIZE, POSE_SIZE>(
             abs_ti_idx, abs_tj_idx,
             rld.d_rel_d_t[i].transpose() *
@@ -379,12 +380,16 @@ class BundleAdjustmentBase {
 
     void operator()(const tbb::blocked_range<RelLinDataIter>& range) {
       for (RelLinData& rld : range) {
+        //^ inverse Hll
         rld.invert_keypoint_hessians();
 
         Eigen::MatrixXd rel_H;
         Eigen::VectorXd rel_b;
+        //^ marginalize all landmarks out, keep relative pose only in rel_H
+        //^ rel_H = Hpp - (Hpl * Hll^-1 * Hlp)
+        //^ rel_b = bp - (Hpl * Hll^-1 * bl)
         linearizeRel(rld, rel_H, rel_b);
-
+        //^ Accumulate samll marginalized rel_H and rel_b to big H and b
         linearizeAbs(rel_H, rel_b, rld, aom, accum);
       }
     }

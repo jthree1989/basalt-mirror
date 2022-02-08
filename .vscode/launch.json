@@ -11,7 +11,7 @@
       "program": "${workspaceFolder}/build/basalt_vio",
       "args": [
         "--dataset-path",
-        "/repo/src/dataset/EuRoC/V1_01_easy",
+        "/repo/wy_code/dataset/EuRoC/V1_01_easy",
         "--cam-calib",
         "${workspaceFolder}/data/euroc_ds_calib.json",
         "--dataset-type",

@@ -351,7 +351,7 @@ bool KeypointVioEstimator::measure(
     frames_after_kf = 0;
     kf_ids.emplace(last_state_t_ns);
 
-    //^ frame_id of left camera(camera0)
+    //^ frame_id of left camera(camera0), this will be used as keyframe id later
     TimeCamId tcidl(opt_flow_meas->t_ns, 0);
 
     int num_points_added = 0;
@@ -420,7 +420,7 @@ bool KeypointVioEstimator::measure(
           KeypointPosition kpt_pos;
           kpt_pos.kf_id = tcidl;
           kpt_pos.dir = StereographicParam<double>::project(p0_triangulated);
-          kpt_pos.id = p0_triangulated[3];
+          kpt_pos.id = p0_triangulated[3]; // inverse depth
           lmdb.addLandmark(lm_id, kpt_pos);
 
           num_points_added++;
@@ -488,7 +488,6 @@ void KeypointVioEstimator::checkMargNullspace() const {
 void KeypointVioEstimator::marginalize(
     const std::map<int64_t, int>& num_points_connected) {
   if (!opt_started) return;
-
   if (frame_poses.size() > max_kfs || frame_states.size() >= max_states) {
     // Marginalize
 
@@ -522,8 +521,10 @@ void KeypointVioEstimator::marginalize(
 
       if (kv.first != last_state_to_marg) {
         if (kf_ids.count(kv.first) > 0) {
+          //^ keyframe, marginalize v and bias
           states_to_marg_vel_bias.emplace(kv.first);
         } else {
+          //^ not keyframe, marginalize all state
           states_to_marg_all.emplace(kv.first);
         }
       }
@@ -552,6 +553,9 @@ void KeypointVioEstimator::marginalize(
         }
 
         for (size_t i = 0; i < ids.size() - 2; i++) {
+          //^ Decide keyframe to marginalize:
+          //^ 1. keyframe which has no co-visibility with current frame,
+          //^ or co-visibility points is quite small compared with added points at that keyframe  
           if (num_points_connected.count(ids[i]) == 0 ||
               (num_points_connected.at(ids[i]) / num_points_kf.at(ids[i]) <
                0.05)) {
@@ -560,7 +564,7 @@ void KeypointVioEstimator::marginalize(
           }
         }
       }
-
+      //^ If still no keyframe to marginalize, use distance in space to decide
       if (id_to_marg < 0) {
         std::vector<int64_t> ids;
         for (int64_t id : kf_ids) {

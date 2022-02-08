@@ -234,7 +234,7 @@ void BundleAdjustmentBase::linearizeHelper(
   error = 0;
   rld_vec.clear();
 
-  std::vector<TimeCamId> obs_tcid_vec;  //^ All related frame_ids in BA
+  std::vector<TimeCamId> obs_tcid_vec;  //^ All related keyframe_ids in this optimization
   for (const auto& kv : obs_to_lin) {
     obs_tcid_vec.emplace_back(kv.first);
     rld_vec.emplace_back(lmdb.numLandmarks(), kv.second.size());
@@ -244,16 +244,13 @@ void BundleAdjustmentBase::linearizeHelper(
       [&](const tbb::blocked_range<size_t>& range) {
         //^ Loop every frame to construct visual factor 
         for (size_t r = range.begin(); r != range.end(); ++r) {
-          auto kv = obs_to_lin.find(obs_tcid_vec[r]);
-
-          RelLinData& rld = rld_vec[r];
-
-          rld.error = 0;
-
-          const TimeCamId& tcid_h = kv->first; //^ frame_cam_id of host frame
+          auto kv = obs_to_lin.find(obs_tcid_vec[r]); //^ Get observations in keyframe at obs_tcid_vec[r]
+          RelLinData& rld = rld_vec[r];               //^ Stores relative-pose information in keyframe at obs_tcid_vec[r]
+          rld.error = 0;                              //^ Error introduced by observations in keyframe at obs_tcid_vec[r]
+          const TimeCamId& tcid_h = kv->first;        //^ frame_cam_id of host frame, host frame always keyframe
 
           for (const auto& obs_kv : kv->second) {
-            const TimeCamId& tcid_t = obs_kv.first; //^ frame_cam_id of target frame
+            const TimeCamId& tcid_t = obs_kv.first;   //^ frame_cam_id of target frame
             if (tcid_h != tcid_t) {
               // target and host are not the same
               //^ store pair of {host frame_cam_id, target frame_cam_id}
@@ -283,7 +280,7 @@ void BundleAdjustmentBase::linearizeHelper(
               Eigen::Matrix4d T_t_h = T_t_h_sophus.matrix();
 
               FrameRelLinData frld;
-
+              //^ Update Hessian matrix and b vector such as Hll/Hpp/Hpl, bl/bp
               std::visit(
                   [&](const auto& cam) {
                     for (size_t i = 0; i < obs_kv.second.size(); i++) {
@@ -292,41 +289,33 @@ void BundleAdjustmentBase::linearizeHelper(
                           lmdb.getLandmark(kpt_obs.kpt_id);
 
                       Eigen::Vector2d res;
-                      Eigen::Matrix<double, 2, POSE_SIZE> d_res_d_xi;
-                      Eigen::Matrix<double, 2, 3> d_res_d_p;
+                      Eigen::Matrix<double, 2, POSE_SIZE> d_res_d_xi; //^ J_res_dT_th -- Jacobian of residual with respect to T_th
+                      Eigen::Matrix<double, 2, 3> d_res_d_p;          //^ J_res_dhP -- Jacobian of residual with respect to point in host frame
 
                       bool valid = linearizePoint(kpt_obs, kpt_pos, T_t_h, cam,
                                                   res, &d_res_d_xi, &d_res_d_p);
 
                       if (valid) {
                         double e = res.norm();
-                        double huber_weight =
-                            e < huber_thresh ? 1.0 : huber_thresh / e;
-                        double obs_weight =
-                            huber_weight / (obs_std_dev * obs_std_dev);
+                        double huber_weight = e < huber_thresh ? 1.0 : huber_thresh / e;
+                        double obs_weight = huber_weight / (obs_std_dev * obs_std_dev);
 
-                        rld.error += (2 - huber_weight) * obs_weight *
-                                     res.transpose() * res;
+                        rld.error += (2 - huber_weight) * obs_weight * res.transpose() * res;
 
                         if (rld.Hll.count(kpt_obs.kpt_id) == 0) {
                           rld.Hll[kpt_obs.kpt_id].setZero();
                           rld.bl[kpt_obs.kpt_id].setZero();
                         }
-
-                        rld.Hll[kpt_obs.kpt_id] +=
-                            obs_weight * d_res_d_p.transpose() * d_res_d_p;
-                        rld.bl[kpt_obs.kpt_id] +=
-                            obs_weight * d_res_d_p.transpose() * res;
-
-                        frld.Hpp +=
-                            obs_weight * d_res_d_xi.transpose() * d_res_d_xi;
+                        //^ Update Hll and bl
+                        rld.Hll[kpt_obs.kpt_id] += obs_weight * d_res_d_p.transpose() * d_res_d_p;
+                        rld.bl[kpt_obs.kpt_id] += obs_weight * d_res_d_p.transpose() * res;
+                        //^ Update Hpp/Hpl and bp
+                        frld.Hpp += obs_weight * d_res_d_xi.transpose() * d_res_d_xi;
                         frld.bp += obs_weight * d_res_d_xi.transpose() * res;
-                        frld.Hpl.emplace_back(
-                            obs_weight * d_res_d_xi.transpose() * d_res_d_p);
+                        frld.Hpl.emplace_back(obs_weight * d_res_d_xi.transpose() * d_res_d_p);
                         frld.lm_id.emplace_back(kpt_obs.kpt_id);
-
-                        rld.lm_to_obs[kpt_obs.kpt_id].emplace_back(
-                            rld.Hpppl.size(), frld.lm_id.size() - 1);
+                        //^ Update relationship between relative pose and landmark
+                        rld.lm_to_obs[kpt_obs.kpt_id].emplace_back(rld.Hpppl.size(), frld.lm_id.size() - 1);
                       }
                     }
                   },
@@ -343,34 +332,25 @@ void BundleAdjustmentBase::linearizeHelper(
                   [&](const auto& cam) {
                     for (size_t i = 0; i < obs_kv.second.size(); i++) {
                       const KeypointObservation& kpt_obs = obs_kv.second[i];
-                      const KeypointPosition& kpt_pos =
-                          lmdb.getLandmark(kpt_obs.kpt_id);
+                      const KeypointPosition& kpt_pos = lmdb.getLandmark(kpt_obs.kpt_id);
 
                       Eigen::Vector2d res;
                       Eigen::Matrix<double, 2, 3> d_res_d_p;
-
-                      bool valid = linearizePoint(kpt_obs, kpt_pos, cam, res,
-                                                  &d_res_d_p);
+                      bool valid = linearizePoint(kpt_obs, kpt_pos, cam, res, &d_res_d_p);
 
                       if (valid) {
                         double e = res.norm();
-                        double huber_weight =
-                            e < huber_thresh ? 1.0 : huber_thresh / e;
-                        double obs_weight =
-                            huber_weight / (obs_std_dev * obs_std_dev);
-
-                        rld.error += (2 - huber_weight) * obs_weight *
-                                     res.transpose() * res;
+                        double huber_weight = e < huber_thresh ? 1.0 : huber_thresh / e;
+                        double obs_weight = huber_weight / (obs_std_dev * obs_std_dev);
+                        rld.error += (2 - huber_weight) * obs_weight * res.transpose() * res;
 
                         if (rld.Hll.count(kpt_obs.kpt_id) == 0) {
                           rld.Hll[kpt_obs.kpt_id].setZero();
                           rld.bl[kpt_obs.kpt_id].setZero();
                         }
 
-                        rld.Hll[kpt_obs.kpt_id] +=
-                            obs_weight * d_res_d_p.transpose() * d_res_d_p;
-                        rld.bl[kpt_obs.kpt_id] +=
-                            obs_weight * d_res_d_p.transpose() * res;
+                        rld.Hll[kpt_obs.kpt_id] += obs_weight * d_res_d_p.transpose() * d_res_d_p;
+                        rld.bl[kpt_obs.kpt_id] += obs_weight * d_res_d_p.transpose() * res;
                       }
                     }
                   },
@@ -382,7 +362,7 @@ void BundleAdjustmentBase::linearizeHelper(
 
   for (const auto& rld : rld_vec) error += rld.error;
 }
-// clang-format on
+
 void BundleAdjustmentBase::linearizeRel(const RelLinData& rld,
                                         Eigen::MatrixXd& H,
                                         Eigen::VectorXd& b) {
@@ -390,7 +370,8 @@ void BundleAdjustmentBase::linearizeRel(const RelLinData& rld,
   //            << obs.size() << std::endl;
 
   // Do schur complement
-  size_t msize = rld.order.size();
+  //^ Keep relative pose only, marginalize landmark out
+  size_t msize = rld.order.size(); // size of relative pose
   H.setZero(POSE_SIZE * msize, POSE_SIZE * msize);
   b.setZero(POSE_SIZE * msize);
 
@@ -421,7 +402,7 @@ void BundleAdjustmentBase::linearizeRel(const RelLinData& rld,
     }
   }
 }
-
+// clang-format on
 void BundleAdjustmentBase::get_current_points(
     Eigen::aligned_vector<Eigen::Vector3d>& points,
     std::vector<int>& ids) const {

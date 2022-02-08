@@ -207,7 +207,7 @@ class KeypointVioEstimator : public VioEstimatorBase,
   std::map<int64_t, int> num_points_kf;                                   //!< frame_id of keyframe -- number of triangulated points added into database
 
   // Marginalization
-  AbsOrderMap marg_order;           //!< Stores information(timestamp, blocks,...) of all states related in BA                                                   
+  AbsOrderMap marg_order;           //!< Stores information(timestamp, blocks,...) of all states related in marginalization                                                 
   Eigen::MatrixXd marg_H;
   Eigen::VectorXd marg_b;
 
